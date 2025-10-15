@@ -18,7 +18,10 @@ Outputs (for --year 2017):
   <root>/coco/tsv/val2017.tsv
 
 Usage:
-  python scripts/download_and_build_coco_captions.py --root /datasets --year 2017
+    # 默认根目录已更改为 /root/lanyun-tmp，可省略 --root
+    python scripts/download_and_build_coco_captions.py --year 2017
+    # 如需覆盖默认目录：
+    python scripts/download_and_build_coco_captions.py --root /root/lanyun-tmp --year 2017
 
 Options:
   --skip-download            Only (re)build TSVs from existing files
@@ -179,7 +182,12 @@ def build_tsv(ann_path: Path, img_dir: Path, out_tsv: Path, max_caps_per_image: 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--root', type=Path, required=True, help='Root folder to place COCO data (will create <root>/coco)')
+    ap.add_argument(
+        '--root',
+        type=Path,
+        default=Path('/root/lanyun-tmp'),
+        help='Root folder to place COCO data (will create <root>/coco). Default: /root/lanyun-tmp'
+    )
     ap.add_argument('--year', type=int, default=2017, choices=[2014, 2017], help='COCO year (default: 2017)')
     ap.add_argument('--skip-download', action='store_true', help='Skip downloading; only build TSVs from existing files')
     ap.add_argument('--force', action='store_true', help='Force redownload and re-extract/rewrite')
