@@ -1,0 +1,30 @@
+{
+  "embed_dim": 512,
+  "vision_cfg": {
+    "timm_model_name": "convnextv2_tiny",
+    "timm_model_pretrained": true,
+    "timm_pool": "avg",
+    "timm_proj": "linear",
+    "image_size": 224
+  },
+  "text_cfg": {
+    "context_length": 77,
+    "vocab_size": 49408,
+    "width": 512,
+    "heads": 8,
+    "layers": 12,
+    "mlp_ratio": 4.0,
+    "pool_type": "argmax",
+    "proj_type": "linear",
+    "proj_bias": false,
+    "output_tokens": false
+  },
+  "preprocess_cfg": {
+    "size": 224,
+    "mode": "RGB",
+    "mean": [0.485, 0.456, 0.406],
+    "std": [0.229, 0.224, 0.225],
+    "interpolation": "bilinear",
+    "resize_mode": "shortest"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "embed_dim": 512,
+  "vision_cfg": {
+    "timm_model_name": "convnextv2_tiny",
+    "timm_model_pretrained": true,
+    "timm_pool": "avg",
+    "timm_proj": "linear",
+    "timm_proj_bias": false,
+    "image_size": 224,
+    "patch_dropout": 0.0
+  },
+  "text_cfg": {
+    "hf_model_name": "roberta-base",
+    "hf_model_pretrained": true,
+    "hf_proj_type": "mlp",
+    "hf_pooler_type": "mean_pooler",
+    "output_tokens": false
+  },
+  "preprocess_cfg": {
+    "size": 224,
+    "mode": "RGB",
+    "mean": [0.485, 0.456, 0.406],
+    "std": [0.229, 0.224, 0.225],
+    "interpolation": "bilinear",
+    "resize_mode": "shortest"
+  }
+}
