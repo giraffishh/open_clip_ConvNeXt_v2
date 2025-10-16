@@ -237,6 +237,8 @@ def main(args):
         image_resize_mode=args.image_resize_mode,  # only effective for inference
         aug_cfg=args.aug_cfg,
         pretrained_image=args.pretrained_image,
+        pretrained_image_path=args.pretrained_image_path,
+        pretrained_text_path=args.pretrained_text_path,
         output_dict=True,
         cache_dir=args.cache_dir,
         **model_kwargs,
@@ -313,23 +315,36 @@ def main(args):
 
         opt = getattr(args, 'opt', 'adamw').lower()
         if opt.startswith('timm/'):
-            from timm.optim import create_optimizer_v2
-            timm_opt = opt.split('timm/')[-1]
-            opt_kwargs = {}
-            assert (args.beta1 is None) == (args.beta2 is None), \
-                'When using timm optimizer, BOTH beta1 and beta2 must be specified (or not specified).'
-            if args.beta1 is not None:
-                opt_kwargs['betas'] = (args.beta1, args.beta2)
-            if args.momentum is not None:
-                opt_kwargs['momentum'] = args.momentum
-            optimizer = create_optimizer_v2(
-                model,
-                timm_opt,
-                lr=args.lr,
-                weight_decay=args.wd,
-                eps=args.eps,
-                **opt_kwargs,
-            )
+            timm_optim_mod = sys.modules.get('timm.optim')
+            if timm_optim_mod is None or not hasattr(timm_optim_mod, 'create_optimizer_v2'):
+                # Try a lazy import; ignore linter if not present at analysis-time
+                try:
+                    from timm.optim import create_optimizer_v2  # type: ignore
+                except Exception:
+                    create_optimizer_v2 = None
+                else:
+                    timm_optim_mod = sys.modules.get('timm.optim')
+            if timm_optim_mod is not None and hasattr(timm_optim_mod, 'create_optimizer_v2'):
+                create_optimizer_v2 = getattr(timm_optim_mod, 'create_optimizer_v2')
+                timm_opt = opt.split('timm/')[-1]
+                opt_kwargs = {}
+                assert (args.beta1 is None) == (args.beta2 is None), \
+                    'When using timm optimizer, BOTH beta1 and beta2 must be specified (or not specified).'
+                if args.beta1 is not None:
+                    opt_kwargs['betas'] = (args.beta1, args.beta2)
+                if args.momentum is not None:
+                    opt_kwargs['momentum'] = args.momentum
+                optimizer = create_optimizer_v2(
+                    model,
+                    timm_opt,
+                    lr=args.lr,
+                    weight_decay=args.wd,
+                    eps=args.eps,
+                    **opt_kwargs,
+                )
+            else:
+                logging.warning('timm optimizer requested but not available; falling back to AdamW.')
+                opt = 'adamw'
         else:
             # If some params are not passed, we use the default values based on model name.
             exclude = lambda n, p: p.ndim < 2 or "bn" in n or "ln" in n or "bias" in n or 'logit_scale' in n
@@ -383,9 +398,9 @@ def main(args):
             if not args.distributed and next(iter(sd.items()))[0].startswith('module'):
                 sd = {k[len('module.'):]: v for k, v in sd.items()}
             model.load_state_dict(sd)
-            if optimizer is not None:
+            if optimizer is not None and not getattr(args, 'reset_optimizer', False):
                 optimizer.load_state_dict(checkpoint["optimizer"])
-            if scaler is not None and 'scaler' in checkpoint:
+            if scaler is not None and 'scaler' in checkpoint and not getattr(args, 'reset_scaler', False):
                 scaler.load_state_dict(checkpoint['scaler'])
             logging.info(f"=> resuming checkpoint '{args.resume}' (epoch {start_epoch})")
         else:
@@ -476,9 +491,122 @@ def main(args):
 
     loss = create_loss(args)
 
+    # Flags to avoid repeated unfreeze in case of resume within the same epoch
+    text_unfired = True
+    image_unfired = True
+
     for epoch in range(start_epoch, args.epochs):
         if is_master(args):
             logging.info(f'Start epoch {epoch}')
+
+        # Auto-unfreeze at epoch boundary BEFORE starting the epoch
+        def _rebuild_optimizer_and_scaler():
+            nonlocal optimizer, scaler, scheduler
+            # Recreate optimizer with same hyperparams and current requires_grad mask
+            opt = getattr(args, 'opt', 'adamw').lower()
+            if opt.startswith('timm/'):
+                # Avoid adding new imports here; reuse loaded timm if available
+                timm_optim_mod = sys.modules.get('timm.optim')
+                if timm_optim_mod is not None and hasattr(timm_optim_mod, 'create_optimizer_v2'):
+                    create_optimizer_v2 = getattr(timm_optim_mod, 'create_optimizer_v2')
+                    timm_opt = opt.split('timm/')[-1]
+                    opt_kwargs = {}
+                    if args.beta1 is not None and args.beta2 is not None:
+                        opt_kwargs['betas'] = (args.beta1, args.beta2)
+                    if args.momentum is not None:
+                        opt_kwargs['momentum'] = args.momentum
+                    optimizer = create_optimizer_v2(
+                        model,
+                        timm_opt,
+                        lr=args.lr,
+                        weight_decay=args.wd,
+                        eps=args.eps,
+                        **opt_kwargs,
+                    )
+                else:
+                    logging.warning('timm optimizer requested but timm.optim not available during rebuild; falling back to AdamW.')
+                    opt = 'adamw'
+            else:
+                exclude = lambda n, p: p.ndim < 2 or "bn" in n or "ln" in n or "bias" in n or 'logit_scale' in n
+                include = lambda n, p: not exclude(n, p)
+                named_parameters = list(model.named_parameters())
+                gain_or_bias_params = [p for n, p in named_parameters if exclude(n, p) and p.requires_grad]
+                rest_params = [p for n, p in named_parameters if include(n, p) and p.requires_grad]
+                optimizer = optim.AdamW(
+                    [
+                        {"params": gain_or_bias_params, "weight_decay": 0.},
+                        {"params": rest_params, "weight_decay": args.wd},
+                    ],
+                    lr=args.lr,
+                    betas=(args.beta1, args.beta2) if (args.beta1 is not None and args.beta2 is not None) else None,
+                    eps=args.eps,
+                )
+            # Re-wrap optimizer for Horovod if needed
+            if args.horovod:
+                optimizer = hvd.DistributedOptimizer(optimizer, named_parameters=model.named_parameters())
+                hvd.broadcast_parameters(model.state_dict(), root_rank=0)
+                hvd.broadcast_optimizer_state(optimizer, root_rank=0)
+            # Recreate scaler if AMP
+            scaler = None
+            if args.precision == "amp":
+                try:
+                    scaler = torch.amp.GradScaler(device=device)
+                except (AttributeError, TypeError):
+                    scaler = torch.cuda.amp.GradScaler()
+            # Rebuild scheduler closure to point to new optimizer instance
+            if 'train' in data and optimizer is not None:
+                total_steps = (data["train"].dataloader.num_batches // args.accum_freq) * args.epochs
+                if args.lr_scheduler == "cosine":
+                    scheduler = cosine_lr(optimizer, args.lr, args.warmup, total_steps)
+                elif args.lr_scheduler == "const":
+                    scheduler = const_lr(optimizer, args.lr, args.warmup, total_steps)
+                elif args.lr_scheduler == "const-cooldown":
+                    assert args.epochs_cooldown is not None, "Please specify the number of cooldown epochs for this lr schedule."
+                    cooldown_steps = (data["train"].dataloader.num_batches // args.accum_freq) * args.epochs_cooldown
+                    scheduler = const_lr_cooldown(
+                        optimizer, args.lr, args.warmup, total_steps,
+                        cooldown_steps, args.lr_cooldown_power, args.lr_cooldown_end)
+                else:
+                    logging.error(f'Unknown scheduler, {args.lr_scheduler}. Available options are: cosine, const, const-cooldown.')
+
+        # Decide unfreeze triggers (epoch is 0-based internally, flags are 1-based)
+        if text_unfired and args.unfreeze_text_at_epoch is not None and (epoch + 1) >= args.unfreeze_text_at_epoch:
+            try:
+                unlocked = args.unlocked_text_layers
+                logging.info(f"Auto-unfreeze TEXT tower at epoch {epoch+1}: unlocked_layers={unlocked}")
+                _model_to_edit = model
+                if hasattr(_model_to_edit, '_orig_mod'):
+                    _model_to_edit = _model_to_edit._orig_mod
+                if hasattr(_model_to_edit, 'module'):
+                    _model_to_edit = _model_to_edit.module
+                _model_to_edit.lock_text_tower(
+                    unlocked_layers=unlocked if unlocked is not None else 10**6,  # effectively full unlock if None
+                    freeze_layer_norm=args.lock_text_freeze_layer_norm,
+                )
+                _rebuild_optimizer_and_scaler()
+            except Exception as e:
+                logging.error(f"Auto-unfreeze TEXT failed: {e}")
+            else:
+                text_unfired = False
+
+        if image_unfired and args.unfreeze_image_at_epoch is not None and (epoch + 1) >= args.unfreeze_image_at_epoch:
+            try:
+                unlocked = args.unlocked_image_groups
+                logging.info(f"Auto-unfreeze IMAGE tower at epoch {epoch+1}: unlocked_groups={unlocked}")
+                _model_to_edit = model
+                if hasattr(_model_to_edit, '_orig_mod'):
+                    _model_to_edit = _model_to_edit._orig_mod
+                if hasattr(_model_to_edit, 'module'):
+                    _model_to_edit = _model_to_edit.module
+                _model_to_edit.lock_image_tower(
+                    unlocked_groups=unlocked if unlocked is not None else 10**6,  # effectively full unlock if None
+                    freeze_bn_stats=args.lock_image_freeze_bn_stats,
+                )
+                _rebuild_optimizer_and_scaler()
+            except Exception as e:
+                logging.error(f"Auto-unfreeze IMAGE failed: {e}")
+            else:
+                image_unfired = False
 
         train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist_model, args, tb_writer=writer)
         completed_epoch = epoch + 1

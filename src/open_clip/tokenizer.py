@@ -455,6 +455,16 @@ class HFTokenizer:
             **kwargs
         )
 
+        # Ensure padding is possible for tokenizers without a pad token (e.g., GPT-2)
+        # We prefer reusing eos_token as pad to avoid changing vocab size / resizing embeddings.
+        if getattr(self.tokenizer, 'pad_token_id', None) is None:
+            eos_tok = getattr(self.tokenizer, 'eos_token', None)
+            if eos_tok is not None:
+                self.tokenizer.pad_token = eos_tok
+            else:
+                # Fallback: add a new PAD token if eos_token doesn't exist (rare)
+                self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+
         # Set language function if available
         set_lang_fn = getattr(self.tokenizer, 'set_src_lang_special_tokens', None)
         if callable(set_lang_fn):

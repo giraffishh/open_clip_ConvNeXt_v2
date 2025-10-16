@@ -493,6 +493,12 @@ def create_model(
     final_model_cfg = deepcopy(model_cfg)
     final_model_cfg.update(model_kwargs)
 
+    # Remove fields that are not accepted by model __init__ (set later via helpers)
+    # preprocess_cfg is applied after instantiation via set_model_preprocess_cfg(...)
+    final_model_cfg.pop('preprocess_cfg', None)
+    # tokenize_cfg (if present in future configs) is not a constructor arg either
+    final_model_cfg.pop('tokenize_cfg', None)
+
     # Get casting dtype based on precision argument
     cast_dtype = get_cast_dtype(precision)
 

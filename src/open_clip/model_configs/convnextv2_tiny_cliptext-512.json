@@ -3,8 +3,8 @@
   "vision_cfg": {
     "timm_model_name": "convnextv2_tiny",
     "timm_model_pretrained": true,
-    "timm_pool": "avg",
-    "timm_proj": "linear",
+    "timm_pool": "abs_attn",
+    "timm_proj": "none",
     "image_size": 224
   },
   "text_cfg": {

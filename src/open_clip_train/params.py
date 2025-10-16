@@ -198,6 +198,43 @@ def parse_args(args):
         help="path to latest checkpoint (default: none)",
     )
     parser.add_argument(
+        "--reset-optimizer",
+        action="store_true",
+        default=False,
+        help="When resuming, do NOT load optimizer state (useful after changing freeze/unfreeze or parameter groups).",
+    )
+    parser.add_argument(
+        "--reset-scaler",
+        action="store_true",
+        default=False,
+        help="When resuming AMP, do NOT load GradScaler state.",
+    )
+    # Automatic unfreeze scheduling
+    parser.add_argument(
+        "--unfreeze-text-at-epoch",
+        type=int,
+        default=None,
+        help="At this epoch (1-based), automatically unfreeze text tower to the specified unlocked layer count.",
+    )
+    parser.add_argument(
+        "--unlocked-text-layers",
+        type=int,
+        default=None,
+        help="After auto-unfreeze, leave last N text transformer layer groups unlocked (if None, fully unfreeze).",
+    )
+    parser.add_argument(
+        "--unfreeze-image-at-epoch",
+        type=int,
+        default=None,
+        help="At this epoch (1-based), automatically unfreeze image tower to the specified unlocked group count.",
+    )
+    parser.add_argument(
+        "--unlocked-image-groups",
+        type=int,
+        default=None,
+        help="After auto-unfreeze, leave last N image tower layer groups unlocked (if None, fully unfreeze).",
+    )
+    parser.add_argument(
         "--precision",
         choices=["amp", "amp_bf16", "amp_bfloat16", "bf16", "fp16", "pure_bf16", "pure_fp16", "fp32"],
         default="amp",
@@ -222,6 +259,12 @@ def parse_args(args):
         help="Load imagenet pretrained weights for image tower backbone if available.",
     )
     parser.add_argument(
+        "--pretrained-image-path",
+        type=str,
+        default=None,
+        help="Path to a local weights file for the image tower backbone (e.g., a timm .safetensors/.pth). If set, avoids online download.",
+    )
+    parser.add_argument(
         "--lock-image",
         default=False,
         action='store_true',
@@ -238,6 +281,12 @@ def parse_args(args):
         default=False,
         action='store_true',
         help="Freeze BatchNorm running stats in image tower for any locked layers.",
+    )
+    parser.add_argument(
+        "--pretrained-text-path",
+        type=str,
+        default=None,
+        help="Path to a local weights file for the text tower (optional).",
     )
     parser.add_argument(
         '--image-mean', type=float, nargs='+', default=None, metavar='MEAN',

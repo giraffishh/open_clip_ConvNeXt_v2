@@ -125,10 +125,18 @@ class HFTextEncoder(nn.Module):
                 self.transformer = create_func(model_args)
                 self.transformer = self.transformer.encoder
             else:
-                self.transformer = create_func(model_args, add_pooling_layer=uses_transformer_pooler)
+                # Only pass add_pooling_layer when actually needed and supported
+                create_kwargs = {}
+                if uses_transformer_pooler:
+                    create_kwargs["add_pooling_layer"] = True
+                self.transformer = create_func(model_args, **create_kwargs)
         else:
             self.config = config
             self.transformer = AutoModel.from_config(config)
+        # Ensure pad_token_id exists (e.g., GPT-2 doesn't define one by default). Use eos_token_id as pad if available.
+        if getattr(self.config, 'pad_token_id', None) is None:
+            eos_id = getattr(self.config, 'eos_token_id', None)
+            self.config.pad_token_id = eos_id if eos_id is not None else 0
         if pooler_type is None:  # get default arch pooler
             pooler_type = (arch_dict[self.config.model_type]["pooler"])
 

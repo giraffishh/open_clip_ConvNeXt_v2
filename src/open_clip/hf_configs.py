@@ -64,4 +64,17 @@ arch_dict = {
         },
         "pooler": "cls_pooler",
     },
+    # https://huggingface.co/docs/transformers/model_doc/gpt2
+    "gpt2": {
+        "config_names": {
+            "context_length": "n_positions",   # or n_ctx in older configs; n_positions is canonical
+            "vocab_size": "vocab_size",
+            "width": "n_embd",
+            "heads": "n_head",
+            "layers": "n_layer",
+            "layer_attr": "h",                 # ModuleList of transformer blocks
+            "token_embeddings_attr": "wte"     # token embedding module
+        },
+        "pooler": "mean_pooler",
+    },
 }
